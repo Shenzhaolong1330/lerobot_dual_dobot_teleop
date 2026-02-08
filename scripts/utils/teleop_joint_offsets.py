@@ -95,7 +95,7 @@ def run(record_cfg):
 # ------------------------ Main ------------------------ #
 def main():
     parent_path = Path(__file__).resolve().parent
-    cfg_path = parent_path.parent / "config" / "cfg.yaml"
+    cfg_path = parent_path.parent / "config" / "record_cfg.yaml"
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
     record_cfg = RecordConfig(cfg["record"])

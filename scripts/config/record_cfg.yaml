@@ -1,5 +1,5 @@
 record:
-  repo_id: &repo_id "szl/pick_all_bluewcubes" 
+  repo_id: &repo_id "szl/pick_red_cube_grey_box" 
   # repo_id: &repo_id "scylearning/pick_greencube_into_trashb
   # Suggested format: <hf_username>/<description>, description = task.description -> Verb_SourceObject_prep_TargetObject
   # e.g. Pick up the green cube and put it into the trash bin -> pick_greencube_into_trashbin
@@ -24,7 +24,7 @@ record:
       channel_ids: [0, 1, 2, 3, 4, 5]
       channel_signs: [-1, -1, 1, -1, -1, 1]
       use_gripper: *use_gripper # whether the spacemouse robot can use gripper
-      pose_scaler: [0.03, 0.15] # scaler for spacemouse actions [position, attitude]
+      pose_scaler: [0.01, 0.05] # scaler for spacemouse actions [position, attitude]
     placo:
       visualize_placo: False
       placo_dt: 0.01
@@ -37,8 +37,8 @@ record:
     close_threshold: 0.7 # threshold to determine gripper open/close
     gripper_bin_threshold: 0.98 # threshold to determine gripper is closed
     # gripper_port: &gripper_port "/dev/franka_left_gripper" # gripper_port
-    gripper_reverse: False  # If gripper moves opposite, flip this value
-    gripper_max_open: 0.0801 # gripper max open width in meters
+    gripper_reverse: false  # If gripper moves opposite, flip this value
+    gripper_max_open: 0.085 # gripper max open width in meters 0.0801 for franka hand, 0.12 for robotiq gripper
 
   policy:
     type: "diffusion"  # 策略类型 (act, diffusion)
@@ -49,8 +49,8 @@ record:
 
   task:
     # description: "Pick up the green cube and put it into the trash bin." # task description
-    description: "pick up all blue cubes and put them into the brown basket" # task description
-    num_episodes: 30 # number of episodes to record
+    description: "pick up the red cube and put it into the grey box" # task description
+    num_episodes: 60 # number of episodes to record
     display: True # Whether to display the data during recording
     resume: false # whether to resume from an existing dataset
     resume_dataset: szl/pick_all_yellowcubes_20260203_v01 # dataset to resume from if resume is True
@@ -60,7 +60,7 @@ record:
     save_meta_period: 1 # Save metadata after every N episodes
 
   cameras:
-    wrist_cam_serial: "344322074412" # wrist camera serial number
+    wrist_cam_serial: "344322074412" # wrist camera serial number 243222071212 344322074412
     exterior_cam_serial: "243322071821" # exterior camera serial number 243322071821 339322074423
     width: 424 # 640 424
     height: 240 # 360 240
@@ -69,7 +69,7 @@ record:
     push_to_hub: False # whether to push the dataset to your huggingface repo after recording
 
 replay:
-  dataset_name: shenzhaolong/pick_carrot_20260203_v01
+  dataset_name: szl/pick_red_cube_grey_box_20260204_v01
   episode_idx: 10 # episode index to replay
   robot:
     ip: *ip
@@ -77,8 +77,8 @@ replay:
   control_mode: *control_mode 
 
 visualize:
-  dataset_name: szl/pick_all_objects_complete
-  episode_index: 212 # episode index to visualize
+  dataset_name: szl/pick_red_cube_grey_box_20260204_v01
+  episode_index: 10 # episode index to visualize
 
 
 

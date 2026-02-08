@@ -31,15 +31,6 @@ def main():
     logging.info("Resetting robot to home position...")
     robot.reset()
     
-    # # 打开夹爪
-    # logging.info("Opening gripper...")
-    # robot.gripper_goto(
-    #     width=robot_config.gripper_max_open, 
-    #     speed=robot._gripper_speed, 
-    #     force=robot._gripper_force, 
-    #     blocking=True
-    # )
-    
     # 断开连接
     robot.disconnect()
     logging.info("Robot reset completed successfully.")
