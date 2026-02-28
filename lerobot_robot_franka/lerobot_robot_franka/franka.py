@@ -37,6 +37,10 @@ class Franka(Robot):
         self._dt = 0.002
         self._last_gripper_position = 1
         
+        # 动作平滑：指数移动平均 (EMA) 滤波器
+        self._smoothing_alpha = 0.4  # 平滑系数，越小越平滑 (0~1)，0.4 是较好的折中
+        self._smoothed_delta = None  # 上一次平滑后的 delta
+        
     def connect(self) -> None:
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self.name} is already connected.")
@@ -200,19 +204,22 @@ class Franka(Robot):
         if self.config.gripper_reverse:
             gripper_position = 1 - gripper_position
 
-        if gripper_position != self._last_gripper_position:
-            self._robot.gripper_goto(
-                width=gripper_position * self.config.gripper_max_open,
-                speed=self._gripper_speed,
-                force=self._gripper_force,
-            )
-            self._last_gripper_position = gripper_position
-        
-        gripper_state = self._robot.gripper_get_state()
-        gripper_state_norm = max(0.0, min(1.0, gripper_state["width"] / self.config.gripper_max_open))
-        if self.config.gripper_reverse:
-            gripper_state_norm = 1 - gripper_state_norm
-        self._gripper_position = gripper_state_norm
+        try:
+            if gripper_position != self._last_gripper_position:
+                self._robot.gripper_goto(
+                    width=gripper_position * self.config.gripper_max_open,
+                    speed=self._gripper_speed,
+                    force=self._gripper_force,
+                )
+                self._last_gripper_position = gripper_position
+            
+            gripper_state = self._robot.gripper_get_state()
+            gripper_state_norm = max(0.0, min(1.0, gripper_state["width"] / self.config.gripper_max_open))
+            if self.config.gripper_reverse:
+                gripper_state_norm = 1 - gripper_state_norm
+            self._gripper_position = gripper_state_norm
+        except Exception as e:
+            logger.warning(f"[GRIPPER] zerorpc error: {e}")
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         if not self.is_connected:
@@ -232,17 +239,24 @@ class Franka(Robot):
         target_joints = np.array([action[f"joint_{i+1}.pos"] for i in range(self._num_joints)])
         
         if not self.config.debug:
-            joint_positions = self._robot.robot_get_joint_positions()
-            max_delta = (np.abs(joint_positions - target_joints)).max()
-            
-            if max_delta > 0.3:
-                print("MOVING TOO FAST! SLOW DOWN!")
-                steps = min(int(max_delta / 0.05), 100)
-                for jnt in np.linspace(joint_positions, target_joints, steps):
-                    self._robot.robot_update_desired_joint_positions(jnt)
-                    time.sleep(0.02)
-            else:
-                self._robot.robot_update_desired_joint_positions(target_joints)
+            try:
+                joint_positions = self._robot.robot_get_joint_positions()
+                max_delta = (np.abs(joint_positions - target_joints)).max()
+                
+                if max_delta > 0.3:
+                    print("MOVING TOO FAST! SLOW DOWN!")
+                    steps = min(int(max_delta / 0.05), 100)
+                    for jnt in np.linspace(joint_positions, target_joints, steps):
+                        self._robot.robot_update_desired_joint_positions(jnt)
+                        time.sleep(0.02)
+                else:
+                    self._robot.robot_update_desired_joint_positions(target_joints)
+            except Exception as e:
+                logger.warning(f"[ROBOT] isoteleop action failed: {e}, trying to restart controller...")
+                try:
+                    self._robot.robot_start_joint_impedance_control()
+                except Exception as e2:
+                    logger.error(f"[ROBOT] Failed to restart controller: {e2}")
         
         if "gripper_position" in action:
             self._handle_gripper(action["gripper_position"], is_binary=False)
@@ -252,28 +266,51 @@ class Franka(Robot):
         # Check for reset request
         if action.get("reset_requested", False):
             logger.info("[ROBOT] Reset requested, moving to home position...")
-            # self._robot.robot_go_home()
-            ee_positions_reset= np.array(
-                # [0.53310639, -0.10013752, 0.42811251, -2.39517709, -2.00913615, 0.0]
-                [0.55581301, 0.00308523, 0.44111654, -2.22150303, -2.15458315, 0.00646556]
-            )
-            print(f"\nMoving ee to: {ee_positions_reset} ...\n")
-            self._robot.robot_move_to_ee_pose(pose = ee_positions_reset, time_to_go=2.0)
-            self._robot.gripper_goto(
-                width=self.config.gripper_max_open,
-                speed=self._gripper_speed,
-                force=self._gripper_force,
-                blocking=True
-            )
-            self._robot.robot_start_joint_impedance_control()
+            try:
+                ee_positions_reset= np.array(
+                    [0.55581301, 0.00308523, 0.44111654, -2.22150303, -2.15458315, 0.00646556]
+                )
+                print(f"\nMoving ee to: {ee_positions_reset} ...\n")
+                self._robot.robot_move_to_ee_pose(pose = ee_positions_reset, time_to_go=2.0)
+                self._robot.gripper_goto(
+                    width=self.config.gripper_max_open,
+                    speed=self._gripper_speed,
+                    force=self._gripper_force,
+                    blocking=True
+                )
+                self._robot.robot_start_joint_impedance_control()
+            except Exception as e:
+                logger.warning(f"[ROBOT] Reset failed: {e}, trying to restart controller...")
+                try:
+                    self._robot.robot_start_joint_impedance_control()
+                except Exception as e2:
+                    logger.error(f"[ROBOT] Failed to restart controller: {e2}")
             return
         
         delta_ee_pose = np.array([action[f"delta_ee_pose.{axis}"] for axis in ["x", "y", "z", "rx", "ry", "rz"]])
 
+        # --- EMA 动作平滑 ---
+        if np.linalg.norm(delta_ee_pose) < 1e-6:
+            # 输入为零（RG 没按），重置平滑状态
+            self._smoothed_delta = None
+        else:
+            if self._smoothed_delta is None:
+                self._smoothed_delta = delta_ee_pose.copy()
+            else:
+                alpha = self._smoothing_alpha
+                self._smoothed_delta = alpha * delta_ee_pose + (1 - alpha) * self._smoothed_delta
+            delta_ee_pose = self._smoothed_delta.copy()
+
         if not self.config.debug:
             import scipy.spatial.transform as st
 
-            ee_pose = self._robot.robot_get_ee_pose()
+            try:
+                ee_pose = self._robot.robot_get_ee_pose()
+            except Exception as e:
+                logger.warning(f"[ROBOT] Failed to get ee pose: {e}")
+                if "gripper_cmd_bin" in action:
+                    self._handle_gripper(action["gripper_cmd_bin"], is_binary=True)
+                return
 
             # 计算位置和旋转的变化量
             position_delta = np.linalg.norm(delta_ee_pose[:3])
@@ -302,7 +339,11 @@ class Franka(Robot):
                     target_rotation = delta_rot * current_rot
                     target_rotvec = target_rotation.as_rotvec()
                     target_ee_pose = np.concatenate([target_position, target_rotvec])
-                    self._robot.robot_update_desired_ee_pose(target_ee_pose)
+                    try:
+                        self._robot.robot_update_desired_ee_pose(target_ee_pose)
+                    except Exception as e:
+                        logger.warning(f"[ROBOT] zerorpc error during interpolation step {step}: {e}")
+                        break
                     time.sleep(0.01)  # 每步间隔 10ms
             elif np.linalg.norm(delta_ee_pose) >= 0.01:
                 # 正常小动作，直接执行
@@ -312,7 +353,10 @@ class Franka(Robot):
                 target_rotation = delta_rot * current_rot
                 target_rotvec = target_rotation.as_rotvec()
                 target_ee_pose = np.concatenate([target_position, target_rotvec])
-                self._robot.robot_update_desired_ee_pose(target_ee_pose)
+                try:
+                    self._robot.robot_update_desired_ee_pose(target_ee_pose)
+                except Exception as e:
+                    logger.warning(f"[ROBOT] zerorpc error: {e}")
         
         if "gripper_cmd_bin" in action:
             self._handle_gripper(action["gripper_cmd_bin"], is_binary=True)
@@ -321,15 +365,20 @@ class Franka(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
         
-        # Read joint positions
-        joint_position = self._robot.robot_get_joint_positions()
-        # print("joint_position:", joint_position)
-        # Read joint velocities
-        joint_velocity = self._robot.robot_get_joint_velocities()
-        # print("joint_velocity:", joint_velocity)
-        # Read end effector pose
-        ee_pose = self._robot.robot_get_ee_pose()
-        # print("ee_pose:", ee_pose)
+        try:
+            # Read joint positions
+            joint_position = self._robot.robot_get_joint_positions()
+            # Read joint velocities
+            joint_velocity = self._robot.robot_get_joint_velocities()
+            # Read end effector pose
+            ee_pose = self._robot.robot_get_ee_pose()
+        except Exception as e:
+            logger.warning(f"[ROBOT] zerorpc error in get_observation: {e}")
+            # 返回上次的观测值作为 fallback
+            if self._prev_observation is not None:
+                return self._prev_observation
+            else:
+                raise
 
         # Read ee speed
         # ee_speed = robot_state.O_dP_EE_d
