@@ -32,8 +32,8 @@ class DobotDualArmServer:
         # Import the underlying Python wrapper for Dobot ROS control
         # This wrapper handles all ROS communication internally
         try:
-            from dobot_ros_wrapper import DobotDualArmWrapper
-            self._robot_wrapper = DobotDualArmWrapper(gripper_enabled=gripper_enabled)
+            from dobot_ros_wrapper import DobotMoveitWrapper
+            self._robot_wrapper = DobotMoveitWrapper()
             log.info("[DUAL-ARM] Dobot ROS wrapper initialized successfully")
         except ImportError:
             log.warning("[DUAL-ARM] dobot_ros_wrapper not found, using mock mode")
@@ -316,24 +316,17 @@ class DobotDualArmServer:
         self.left_gripper_initialize()
         self.right_gripper_initialize()
 
-
 def start_server(port: int = 4242, gripper_enabled: bool = True):
-    """Start the dual-arm zerorpc server on a single port."""
-    server = zerorpc.Server(DobotDualArmServer(gripper_enabled=gripper_enabled))
+    server = zerorpc.Server(DobotDualArmServer())
     server.bind(f"tcp://0.0.0.0:{port}")
     log.info(f"[DUAL-ARM SERVER] Started on port {port}")
-    log.info(f"[DUAL-ARM SERVER] Gripper enabled: {gripper_enabled}")
     server.run()
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     import argparse
-    
-    parser = argparse.ArgumentParser(description="Dobot Nova5 Dual-Arm Server")
-    parser.add_argument("--port", type=int, default=4242, help="Server port (default: 4242)")
-    parser.add_argument("--no-gripper", action="store_true", help="Disable grippers")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', type=int, default=4242)
+    parser.add_argument('--no-gripper', action='store_true')
     args = parser.parse_args()
-    
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    
+    logging.basicConfig(level=logging.INFO)
     start_server(port=args.port, gripper_enabled=not args.no_gripper)
