@@ -17,6 +17,7 @@ from lerobot.robots.robot import Robot
 
 from .config_dobot import DobotDualArmConfig
 from .dobot_interface_client import DobotDualArmClient
+from .dual_gripper_client import DualGripperClient
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -38,6 +39,7 @@ class DobotDualArm(Robot):
         self.config = config
         self._is_connected = False
         self._robot: Optional[DobotDualArmClient] = None
+        self._gripper_client: Optional[DualGripperClient] = None
         self._prev_observation = None
         self._num_joints_per_arm = 6
         
@@ -65,6 +67,9 @@ class DobotDualArm(Robot):
         # Connect to dual-arm server (single port)
         self._robot = self._check_dobot_connection()
         
+        # Connect to gripper server
+        self._gripper_client = self._check_gripper_connection()
+        
         # Initialize grippers
         if self.config.use_gripper:
             self._check_grippers_connection()
@@ -88,7 +93,6 @@ class DobotDualArm(Robot):
                 ip='127.0.0.1',
                 port=self.config.robot_port
             )
-            robot.robot_start_joint_impedance_control()
             
             # Get joint positions for both arms
             left_joints = robot.left_robot_get_joint_positions()
@@ -107,13 +111,31 @@ class DobotDualArm(Robot):
             logger.error(f"Exception: {e}\n")
             raise
     
+    def _check_gripper_connection(self) -> DualGripperClient:
+        """Connect to dual gripper server via zerorpc."""
+        try:
+            logger.info("\n===== [GRIPPER] Connecting to dual gripper server =====")
+            
+            gripper_client = DualGripperClient(
+                ip='127.0.0.1',
+                port=4243
+            )
+            
+            logger.info("===== [GRIPPER] Dual gripper server connected successfully =====\n")
+            return gripper_client
+            
+        except Exception as e:
+            logger.error("===== [ERROR] Failed to connect to dual gripper server =====")
+            logger.error(f"Exception: {e}\n")
+            return DualGripperClient()
+
     def _check_grippers_connection(self):
         """Initialize both Robotiq 2F-85 grippers."""
         logger.info("\n===== [GRIPPER] Initializing Robotiq 2F-85 grippers...")
         
         # Initialize left gripper
-        self._robot.left_gripper_initialize()
-        self._robot.left_gripper_goto(
+        self._gripper_client.left_gripper_initialize()
+        self._gripper_client.left_gripper_goto(
             width=self.config.gripper_max_open,
             speed=self._gripper_speed,
             force=self._gripper_force,
@@ -122,8 +144,8 @@ class DobotDualArm(Robot):
         logger.info("[LEFT GRIPPER] Initialized successfully")
         
         # Initialize right gripper
-        self._robot.right_gripper_initialize()
-        self._robot.right_gripper_goto(
+        self._gripper_client.right_gripper_initialize()
+        self._gripper_client.right_gripper_goto(
             width=self.config.gripper_max_open,
             speed=self._gripper_speed,
             force=self._gripper_force,
@@ -140,13 +162,13 @@ class DobotDualArm(Robot):
         self._robot.robot_go_home()
         
         if self.config.use_gripper:
-            self._robot.left_gripper_goto(
+            self._gripper_client.left_gripper_goto(
                 width=self.config.gripper_max_open,
                 speed=self._gripper_speed,
                 force=self._gripper_force,
                 blocking=True
             )
-            self._robot.right_gripper_goto(
+            self._gripper_client.right_gripper_goto(
                 width=self.config.gripper_max_open,
                 speed=self._gripper_speed,
                 force=self._gripper_force,
@@ -237,13 +259,13 @@ class DobotDualArm(Robot):
             last_pos = getattr(self, last_pos_attr)
             if gripper_position != last_pos:
                 if arm_side == "left":
-                    self._robot.left_gripper_goto(
+                    self._gripper_client.left_gripper_goto(
                         width=gripper_position * self.config.gripper_max_open,
                         speed=self._gripper_speed,
                         force=self._gripper_force,
                     )
                 else:
-                    self._robot.right_gripper_goto(
+                    self._gripper_client.right_gripper_goto(
                         width=gripper_position * self.config.gripper_max_open,
                         speed=self._gripper_speed,
                         force=self._gripper_force,
@@ -251,9 +273,9 @@ class DobotDualArm(Robot):
                 setattr(self, last_pos_attr, gripper_position)
             
             if arm_side == "left":
-                gripper_state = self._robot.left_gripper_get_state()
+                gripper_state = self._gripper_client.left_gripper_get_state()
             else:
-                gripper_state = self._robot.right_gripper_get_state()
+                gripper_state = self._gripper_client.right_gripper_get_state()
             
             gripper_state_norm = max(0.0, min(1.0, gripper_state["width"] / self.config.gripper_max_open))
             if self.config.gripper_reverse:
@@ -315,19 +337,18 @@ class DobotDualArm(Robot):
             logger.info("[ROBOT] Reset requested for dual-arm system...")
             self._robot.robot_go_home()
             if self.config.use_gripper:
-                self._robot.left_gripper_goto(
+                self._gripper_client.left_gripper_goto(
                     width=self.config.gripper_max_open,
                     speed=self._gripper_speed,
                     force=self._gripper_force,
                     blocking=True
                 )
-                self._robot.right_gripper_goto(
+                self._gripper_client.right_gripper_goto(
                     width=self.config.gripper_max_open,
                     speed=self._gripper_speed,
                     force=self._gripper_force,
                     blocking=True
                 )
-            self._robot.robot_start_joint_impedance_control()
             return
         
         # Get delta poses for both arms
@@ -459,6 +480,9 @@ class DobotDualArm(Robot):
         if self._robot is not None:
             self._robot.close()
         
+        if self._gripper_client is not None:
+            self._gripper_client.close()
+        
         self.is_connected = False
         logger.info(f"[INFO] ===== {self.name} disconnected =====")
     
@@ -489,4 +513,3 @@ class DobotDualArm(Robot):
     @property
     def observation_features(self) -> dict[str, Any]:
         return {**self._motors_ft, **self._cameras_ft}
-
