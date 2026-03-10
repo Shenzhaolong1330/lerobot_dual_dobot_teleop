@@ -68,11 +68,8 @@ class DobotDualArm(Robot):
         self._robot = self._check_dobot_connection()
         
         # Connect to gripper server
-        self._gripper_client = self._check_gripper_connection()
-        
-        # Initialize grippers
         if self.config.use_gripper:
-            self._check_grippers_connection()
+            self._gripper_client = self._check_gripper_connection()
         
         # Connect cameras
         logger.info("\n===== [CAM] Initializing Cameras =====")
@@ -90,18 +87,18 @@ class DobotDualArm(Robot):
             logger.info("\n===== [ROBOT] Connecting to Dobot dual-arm =====")
             
             robot = DobotDualArmClient(
-                ip='127.0.0.1',
+                ip=self.config.robot_ip,
                 port=self.config.robot_port
             )
             
-            # Get joint positions for both arms
-            left_joints = robot.left_robot_get_joint_positions()
-            right_joints = robot.right_robot_get_joint_positions()
+            # Get end-effector poses for both arms
+            left_ee_pose = robot.left_robot_get_ee_pose()
+            right_ee_pose = robot.right_robot_get_ee_pose()
             
-            if left_joints is not None and len(left_joints) == self._num_joints_per_arm:
-                logger.info(f"[LEFT ARM] Joint positions: {[round(j, 4) for j in left_joints]}")
-            if right_joints is not None and len(right_joints) == self._num_joints_per_arm:
-                logger.info(f"[RIGHT ARM] Joint positions: {[round(j, 4) for j in right_joints]}")
+            if left_ee_pose is not None and len(left_ee_pose) == 6:
+                logger.info(f"[LEFT ARM] End-effector pose: {[round(j, 4) for j in left_ee_pose]}")
+            if right_ee_pose is not None and len(right_ee_pose) == 6:
+                logger.info(f"[RIGHT ARM] End-effector pose: {[round(j, 4) for j in right_ee_pose]}")
             
             logger.info("===== [ROBOT] Dobot dual-arm connected successfully =====\n")
             return robot
@@ -117,11 +114,29 @@ class DobotDualArm(Robot):
             logger.info("\n===== [GRIPPER] Connecting to dual gripper server =====")
             
             gripper_client = DualGripperClient(
-                ip='127.0.0.1',
-                port=4243
+                ip=self.config.gripper_ip,
+                port=self.config.gripper_port
             )
             
             logger.info("===== [GRIPPER] Dual gripper server connected successfully =====\n")
+            gripper_client.left_gripper_initialize()
+            gripper_client.left_gripper_goto(
+                width=self.config.gripper_max_open,
+                speed=self._gripper_speed,
+                force=self._gripper_force,
+                blocking=True
+                )
+            logger.info("[LEFT GRIPPER] Initialized successfully")
+
+            gripper_client.right_gripper_initialize()
+            gripper_client.right_gripper_goto(
+                width=self.config.gripper_max_open,
+                speed=self._gripper_speed,
+                force=self._gripper_force,
+                blocking=True
+                )
+            logger.info("[RIGHT GRIPPER] Initialized successfully")
+
             return gripper_client
             
         except Exception as e:
@@ -129,31 +144,6 @@ class DobotDualArm(Robot):
             logger.error(f"Exception: {e}\n")
             return DualGripperClient()
 
-    def _check_grippers_connection(self):
-        """Initialize both Robotiq 2F-85 grippers."""
-        logger.info("\n===== [GRIPPER] Initializing Robotiq 2F-85 grippers...")
-        
-        # Initialize left gripper
-        self._gripper_client.left_gripper_initialize()
-        self._gripper_client.left_gripper_goto(
-            width=self.config.gripper_max_open,
-            speed=self._gripper_speed,
-            force=self._gripper_force,
-            blocking=True
-        )
-        logger.info("[LEFT GRIPPER] Initialized successfully")
-        
-        # Initialize right gripper
-        self._gripper_client.right_gripper_initialize()
-        self._gripper_client.right_gripper_goto(
-            width=self.config.gripper_max_open,
-            speed=self._gripper_speed,
-            force=self._gripper_force,
-            blocking=True
-        )
-        logger.info("[RIGHT GRIPPER] Initialized successfully")
-        logger.info("===== [GRIPPER] Both grippers initialized successfully =====\n")
-    
     def reset(self) -> None:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self.name} is not connected.")
@@ -182,15 +172,13 @@ class DobotDualArm(Robot):
         """Motor features for dual-arm system."""
         features = {}
         
-        # Left arm joint positions and velocities
-        for i in range(self._num_joints_per_arm):
-            features[f"left_joint_{i+1}.pos"] = float
-            features[f"left_joint_{i+1}.vel"] = float
+        # # Left arm joint positions
+        # for i in range(self._num_joints_per_arm):
+        #     features[f"left_joint_{i+1}.pos"] = float
         
-        # Right arm joint positions and velocities
-        for i in range(self._num_joints_per_arm):
-            features[f"right_joint_{i+1}.pos"] = float
-            features[f"right_joint_{i+1}.vel"] = float
+        # # Right arm joint positions
+        # for i in range(self._num_joints_per_arm):
+        #     features[f"right_joint_{i+1}.pos"] = float
         
         # Left arm end effector pose
         for axis in ["x", "y", "z", "rx", "ry", "rz"]:
@@ -211,34 +199,18 @@ class DobotDualArm(Robot):
     
     @property
     def action_features(self) -> dict[str, type]:
-        """Return action features based on control mode."""
-        if self.config.control_mode == "isoteleop":
-            features = {}
-            # Left arm joints
-            for i in range(self._num_joints_per_arm):
-                features[f"left_joint_{i+1}.pos"] = float
-            # Right arm joints
-            for i in range(self._num_joints_per_arm):
-                features[f"right_joint_{i+1}.pos"] = float
-            if self.config.use_gripper:
-                features["left_gripper_position"] = float
-                features["right_gripper_position"] = float
-            return features
-        elif self.config.control_mode == "oculus":
-            features = {}
-            # Left arm delta pose
-            for axis in ["x", "y", "z", "rx", "ry", "rz"]:
-                features[f"left_delta_ee_pose.{axis}"] = float
-            # Right arm delta pose
-            for axis in ["x", "y", "z", "rx", "ry", "rz"]:
-                features[f"right_delta_ee_pose.{axis}"] = float
-            if self.config.use_gripper:
-                features["left_gripper_cmd_bin"] = float
-                features["right_gripper_cmd_bin"] = float
-            return features
-        else:
-            raise ValueError(f"Unsupported control mode: {self.config.control_mode}")
-    
+        features = {}
+        # Left arm delta pose
+        for axis in ["x", "y", "z", "rx", "ry", "rz"]:
+            features[f"left_delta_ee_pose.{axis}"] = float
+        # Right arm delta pose
+        for axis in ["x", "y", "z", "rx", "ry", "rz"]:
+            features[f"right_delta_ee_pose.{axis}"] = float
+        if self.config.use_gripper:
+            features["left_gripper_cmd_bin"] = float
+            features["right_gripper_cmd_bin"] = float
+        return features
+
     def _handle_gripper(self, arm_side: str, gripper_value: float, is_binary: bool = True) -> None:
         """Handle gripper control for specified arm."""
         if not self.config.use_gripper:
@@ -287,51 +259,93 @@ class DobotDualArm(Robot):
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        # Check for reset request
+        if action.get("reset_requested", False):
+            logger.info("[ROBOT] Reset requested for dual-arm system...")
+            self._robot.robot_go_home()
+            if self.config.use_gripper:
+                self._gripper_client.left_gripper_goto(
+                    width=self.config.gripper_max_open,
+                    speed=self._gripper_speed,
+                    force=self._gripper_force,
+                    blocking=True
+                )
+                self._gripper_client.right_gripper_goto(
+                    width=self.config.gripper_max_open,
+                    speed=self._gripper_speed,
+                    force=self._gripper_force,
+                    blocking=True
+                )
+            return action
+
+        # Use joint servo control if joint positions are provided
+        if not self.config.debug:
+            try:
+                # Check if joint positions are in action
+                has_joints = all(f"left_joint_{i+1}.pos" in action for i in range(6))
+                
+                if has_joints:
+                    # Use servo_j_delta for joint control
+                    self._send_action_joint_servo(action)
+                else:
+                    # Fallback to Cartesian control
+                    self._send_action_cartesian(action)
+                    
+            except Exception as e:
+                logger.warning(f"[ROBOT] Action failed: {e}")
         
-        if self.config.control_mode == "isoteleop":
-            self._send_action_isoteleop(action)
-        elif self.config.control_mode == "oculus":
-            self._send_action_cartesian(action)
-        else:
-            raise ValueError(f"Unsupported control mode: {self.config.control_mode}")
-        
+        # Handle grippers
+        if "left_gripper_cmd_bin" in action:
+            self._handle_gripper("left", action["left_gripper_cmd_bin"], is_binary=True)
+        if "right_gripper_cmd_bin" in action:
+            self._handle_gripper("right", action["right_gripper_cmd_bin"], is_binary=True)
+
         return action
     
-    def _send_action_isoteleop(self, action: dict[str, Any]) -> None:
-        """Send action in isoteleop mode (joint positions)."""
-        # Left arm
+    def _send_action_joint_servo(self, action: dict[str, Any]) -> None:
+        """Send action using joint servo control (servo_j_delta)."""
+        # Get target joint positions (in radians)
         left_target_joints = np.array([
             action[f"left_joint_{i+1}.pos"] for i in range(self._num_joints_per_arm)
         ])
-        # Right arm
         right_target_joints = np.array([
             action[f"right_joint_{i+1}.pos"] for i in range(self._num_joints_per_arm)
         ])
         
-        if not self.config.debug:
-            try:
-                left_joints = self._robot.left_robot_get_joint_positions()
-                right_joints = self._robot.right_robot_get_joint_positions()
-                
-                left_max_delta = (np.abs(left_joints - left_target_joints)).max()
-                right_max_delta = (np.abs(right_joints - right_target_joints)).max()
-                
-                if left_max_delta > self.config.max_joint_delta or right_max_delta > self.config.max_joint_delta:
-                    logger.warning("MOVING TOO FAST! SLOW DOWN!")
-                
-                self._robot.left_robot_update_desired_joint_positions(left_target_joints)
-                self._robot.right_robot_update_desired_joint_positions(right_target_joints)
-                
-            except Exception as e:
-                logger.warning(f"[ROBOT] isoteleop action failed: {e}")
+        # Get current joint positions (in radians)
+        left_current_joints = self._robot.left_robot_get_joint_positions()
+        right_current_joints = self._robot.right_robot_get_joint_positions()
         
-        if "left_gripper_position" in action:
-            self._handle_gripper("left", action["left_gripper_position"], is_binary=False)
-        if "right_gripper_position" in action:
-            self._handle_gripper("right", action["right_gripper_position"], is_binary=False)
+        # Compute delta joints (in radians)
+        left_delta_joints = left_target_joints - left_current_joints
+        right_delta_joints = right_target_joints - right_current_joints
+        
+        # Safety check: limit max joint delta
+        left_max_delta = np.abs(left_delta_joints).max()
+        right_max_delta = np.abs(right_delta_joints).max()
+        
+        if left_max_delta > self.config.max_joint_delta or right_max_delta > self.config.max_joint_delta:
+            logger.warning(f"[ROBOT] Joint delta too large: left={left_max_delta:.3f}, right={right_max_delta:.3f}")
+            # Scale down if too large
+            scale = self.config.max_joint_delta / max(left_max_delta, right_max_delta)
+            left_delta_joints *= scale
+            right_delta_joints *= scale
+        
+        # Send servo commands (client expects radians)
+        try:
+            # Use servo_j_delta for smooth joint control
+            self._robot.servo_j_delta('left', left_delta_joints, t=0.1, lookahead_time=0.05, gain=300)
+            self._robot.servo_j_delta('right', right_delta_joints, t=0.1, lookahead_time=0.05, gain=300)
+            
+            logger.debug(f"[SERVO_J] Left delta (rad): {left_delta_joints}")
+            logger.debug(f"[SERVO_J] Right delta (rad): {right_delta_joints}")
+            
+        except Exception as e:
+            logger.warning(f"[SERVO_J] Failed: {e}")
     
     def _send_action_cartesian(self, action: dict[str, Any]) -> None:
-        """Send action in oculus mode (delta ee pose)."""
+        """Send action in oculus mode (delta ee pose) without using loops."""
         # Check for reset request
         if action.get("reset_requested", False):
             logger.info("[ROBOT] Reset requested for dual-arm system...")
@@ -358,71 +372,95 @@ class DobotDualArm(Robot):
         right_delta = np.array([
             action[f"right_delta_ee_pose.{axis}"] for axis in ["x", "y", "z", "rx", "ry", "rz"]
         ])
-        
-        # EMA smoothing for both arms
-        for arm_side, delta, smoothed_attr in [
-            ("left", left_delta, "_left_smoothed_delta"),
-            ("right", right_delta, "_right_smoothed_delta")
-        ]:
-            if np.linalg.norm(delta) < 1e-6:
-                setattr(self, smoothed_attr, None)
-            else:
-                smoothed = getattr(self, smoothed_attr)
-                if smoothed is None:
-                    smoothed = delta.copy()
-                else:
-                    alpha = self._smoothing_alpha
-                    smoothed = alpha * delta + (1 - alpha) * smoothed
-                setattr(self, smoothed_attr, smoothed)
-        
+        # print(f"[ACTION] Left delta pose: {left_delta}")
+        # print(f"[ACTION] Right delta pose: {right_delta}") 
+
+        # 使用 dual_robot_move_to_ee_pose 同时控制双臂
         if not self.config.debug:
             import scipy.spatial.transform as st
             
-            for arm_side, delta, smoothed_attr in [
-                ("left", left_delta, "_left_smoothed_delta"),
-                ("right", right_delta, "_right_smoothed_delta")
-            ]:
-                smoothed = getattr(self, smoothed_attr)
-                
-                if smoothed is None or np.linalg.norm(smoothed) < 0.01:
-                    continue
-                
+            # 获取当前末端位姿（一次性获取，避免重复调用）
+            try:
+                left_ee_pose = self._robot.left_robot_get_ee_pose()
+                right_ee_pose = self._robot.right_robot_get_ee_pose()
+            except Exception as e:
+                logger.warning(f"[ROBOT] Failed to get EE poses: {e}")
+                return
+            
+            # 计算左臂目标位姿
+            target_left_ee_pose = None
+            if np.linalg.norm(left_delta) >= 0.001:
                 try:
-                    if arm_side == "left":
-                        ee_pose = self._robot.left_robot_get_ee_pose()
-                    else:
-                        ee_pose = self._robot.right_robot_get_ee_pose()
+                    target_left_position = left_ee_pose[:3] + left_delta[:3]
+                    current_left_rot = st.Rotation.from_euler("xyz", left_ee_pose[3:])
                     
-                    target_position = ee_pose[:3] + smoothed[:3]
-                    current_rot = st.Rotation.from_rotvec(ee_pose[3:])
-                    delta_rot = st.Rotation.from_rotvec(smoothed[3:])
-                    target_rotation = delta_rot * current_rot
-                    target_rotvec = target_rotation.as_rotvec()
-                    target_ee_pose = np.concatenate([target_position, target_rotvec])
-                    
-                    if arm_side == "left":
-                        self._robot.left_robot_update_desired_ee_pose(target_ee_pose)
+                    delta_rot_norm = np.linalg.norm(left_delta[3:])
+                    if delta_rot_norm < 1e-6:
+                        target_left_euler = left_ee_pose[3:]
+                        print(f"[LEFT ARM] Rotation delta is very small ({delta_rot_norm:.2e}), keeping current rotation.")
                     else:
-                        self._robot.right_robot_update_desired_ee_pose(target_ee_pose)
+                        delta_rot = st.Rotation.from_euler("xyz", left_delta[3:])
+                        target_rotation = delta_rot * current_left_rot
+                        target_left_euler = target_rotation.as_euler("xyz")
+                    
+                    target_left_ee_pose = np.concatenate([target_left_position, target_left_euler])
                 except Exception as e:
-                    logger.warning(f"[{arm_side.upper()} ARM] zerorpc error: {e}")
+                    logger.warning(f"[LEFT ARM] Failed to compute target pose: {e}")
+            
+            # 计算右臂目标位姿
+            target_right_ee_pose = None
+            if np.linalg.norm(right_delta) >= 0.001:
+                try:
+                    target_right_position = right_ee_pose[:3] + right_delta[:3]
+                    current_right_rot = st.Rotation.from_euler("xyz", right_ee_pose[3:])
+                    
+                    delta_rot_norm = np.linalg.norm(right_delta[3:])
+                    if delta_rot_norm < 1e-6:
+                        target_right_euler = right_ee_pose[3:]
+                        print(f"[RIGHT ARM] Rotation delta is very small ({delta_rot_norm:.2e}), keeping current rotation.")
+                    else:
+                        delta_rot = st.Rotation.from_euler("xyz", right_delta[3:])
+                        target_rotation = delta_rot * current_right_rot
+                        target_right_euler = target_rotation.as_euler("xyz")
+                    
+                    target_right_ee_pose = np.concatenate([target_right_position, target_right_euler])
+                except Exception as e:
+                    logger.warning(f"[RIGHT ARM] Failed to compute target pose: {e}")
+            
+            # 使用 dual_robot_move_to_ee_pose 同时控制双臂
+            if target_left_ee_pose is not None or target_right_ee_pose is not None:
+                try:
+                    # 如果某个臂没有目标位姿，使用当前位姿
+                    if target_left_ee_pose is None:
+                        target_left_ee_pose = left_ee_pose
+                    if target_right_ee_pose is None:
+                        target_right_ee_pose = right_ee_pose
+                    
+                    # wait=True 确保动作执行完成后再返回
+                    self._robot.dual_robot_move_to_ee_pose(
+                        target_left_ee_pose.tolist(),
+                        target_right_ee_pose.tolist(),
+                        wait=True  # 等待动作完成
+                    )
+                    print(f"[DUAL ARM] Executed: Left target: {target_left_ee_pose[:3]}, Right target: {target_right_ee_pose[:3]}")
+                except Exception as e:
+                    logger.warning(f"[DUAL ARM] dual_robot_move_to_ee_pose failed: {e}")
         
         if "left_gripper_cmd_bin" in action:
             self._handle_gripper("left", action["left_gripper_cmd_bin"], is_binary=True)
         if "right_gripper_cmd_bin" in action:
             self._handle_gripper("right", action["right_gripper_cmd_bin"], is_binary=True)
-    
+
+
     def get_observation(self) -> dict[str, Any]:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
         
         try:
             left_joint_pos = self._robot.left_robot_get_joint_positions()
-            left_joint_vel = self._robot.left_robot_get_joint_velocities()
             left_ee_pose = self._robot.left_robot_get_ee_pose()
             
             right_joint_pos = self._robot.right_robot_get_joint_positions()
-            right_joint_vel = self._robot.right_robot_get_joint_velocities()
             right_ee_pose = self._robot.right_robot_get_ee_pose()
             
         except Exception as e:
@@ -437,14 +475,14 @@ class DobotDualArm(Robot):
         # Left arm observations
         for i in range(len(left_joint_pos)):
             obs_dict[f"left_joint_{i+1}.pos"] = float(left_joint_pos[i])
-            obs_dict[f"left_joint_{i+1}.vel"] = float(left_joint_vel[i])
+
         for i, axis in enumerate(["x", "y", "z", "rx", "ry", "rz"]):
             obs_dict[f"left_ee_pose.{axis}"] = float(left_ee_pose[i])
         
         # Right arm observations
         for i in range(len(right_joint_pos)):
             obs_dict[f"right_joint_{i+1}.pos"] = float(right_joint_pos[i])
-            obs_dict[f"right_joint_{i+1}.vel"] = float(right_joint_vel[i])
+
         for i, axis in enumerate(["x", "y", "z", "rx", "ry", "rz"]):
             obs_dict[f"right_ee_pose.{axis}"] = float(right_ee_pose[i])
         

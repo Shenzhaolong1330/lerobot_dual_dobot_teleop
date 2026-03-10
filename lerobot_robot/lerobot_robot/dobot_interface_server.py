@@ -196,7 +196,7 @@ class DobotDualArmServer:
         if self._robot is None:
             return [0.0] * 6
         
-        # Convert m to mm, radians to degrees for ROS wrapper
+        # ROS wrapper expects mm and degrees for IK
         pose_array = np.array(pose)
         pose_dobot = np.concatenate([
             pose_array[:3] * 1000,  # m -> mm
@@ -208,7 +208,7 @@ class DobotDualArmServer:
         if current_joints is not None:
             current_joints_deg = np.degrees(current_joints).tolist()
         
-        # Solve IK (returns degrees)
+        # Solve IK (ROS wrapper returns degrees)
         result_deg = self._robot.inverse_kinematics(arm_name, pose_dobot, current_joints_deg)
         
         # Convert back to radians
