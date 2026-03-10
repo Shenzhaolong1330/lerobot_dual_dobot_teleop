@@ -41,6 +41,10 @@ class OculusDualArmTeleopConfig(BaseTeleopConfig):
     dual_arm: bool = True
     ip: str = "192.168.110.62"
     
+    # Robot connection (for state feedback)
+    robot_ip: str = "127.0.0.1"
+    robot_port: int = 4242
+    
     # Left controller (controls left arm)
     left_pose_scaler: List[float] = field(default_factory=lambda: [1.0, 1.0])
     left_channel_signs: List[int] = field(default_factory=lambda: [1, 1, 1, 1, 1, 1])
